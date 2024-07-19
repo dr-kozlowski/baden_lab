@@ -1,16 +1,18 @@
 import numpy as np
 import numpy.ma as ma
 
-def get_mask(traces, quality_criterion_all_traces, qc, ipl_positions, std_qc=1):
+def get_mask(traces, quality_criterion_all_traces, qc, ipl_positions=None, std_qc=1):
     # Create a mask based on the quality criterion
-    mask_std = np.abs(traces[:, :]) > std_qc
+    mask_std = np.max(np.abs(traces[:, :]), axis=1) < std_qc
+    mask_std = mask_std[:, np.newaxis] # add a new axis to match the dimensions of other masks
+    
     mask = quality_criterion_all_traces < qc    
     if ipl_positions is not None:
         # Create a mask for -1 positions - it means they are out of the IPL ROI
-        mask2 = (ipl_positions == -1)    
+        mask_ipl = (ipl_positions == -1)    
         # Combine the masks using logical OR
-        mask_OR = mask | mask2 | mask_std
-        return mask_OR
+        mask_or = mask | mask_ipl | mask_std
+        return mask_or
     else:
         # Combine the masks using logical OR
         return mask | mask_std

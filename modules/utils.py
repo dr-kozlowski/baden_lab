@@ -1,16 +1,21 @@
 import os
 import json
-from dataclasses import dataclass, field
 import h5py
 from tqdm.auto import tqdm
-from dacite import from_dict
-import numpy as np
-from sklearn.preprocessing import StandardScaler
 import warnings
 import datetime
+
+from dataclasses import dataclass, field
+from dacite import from_dict
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import StandardScaler
 import scipy.signal as sig
 import scipy.interpolate as interp
-import pandas as pd
+import scipy.optimize as optimize
 
 def load_json(fpath: str) -> list:
     """
@@ -328,3 +333,330 @@ def get_downsampled_data(pooled_traces: np.array, num_of_templates_ticks: int) -
     
     # Return the downsampled data
     return ds_traces
+
+def get_closest_wavelength(df, wv):
+	"""
+	Find the index of the closest wavelength to the given wavelength in the dataframe.
+
+	Parameters
+	----------
+	df : pandas.DataFrame
+		A dataframe with a single column of wavelengths
+	wv : float
+		The wavelength to find the closest match to
+
+	Returns
+	-------
+	int
+		The index of the closest wavelength
+	"""
+	wvs = df.to_numpy()
+	# Calculate the difference between the given wavelength and all the wavelengths in the dataframe
+	diff = wvs - wv
+	# Find the index of the minimum difference
+	idx = (np.abs(diff)).argmin()
+	return idx
+
+
+def get_interpolated_cone_tunings(tunings: np.array, N_ticks_extra: int) -> np.array:
+    """Interpolate cone tunings to a specified number of ticks.
+    
+    Args:
+        tunings (np.array): The input tunings to be interpolated.
+        N_ticks_extra (int): The desired number of ticks in the interpolated tunings.
+        
+    Returns:
+        np.array: The interpolated tunings.
+    """
+    # Get the number of ticks in the input tunings and create equally spaced ticks
+    n = tunings.shape[0]
+    ticks = np.linspace(tunings['wavelength'].iloc[0], tunings['wavelength'].iloc[-1], n)
+
+    # Create an interpolation function using the input tunings
+    cols = list(tunings.columns) # list of column names
+    f = interp.interp1d(ticks.T, tunings[cols[1:]].to_numpy(), axis=0, fill_value='extrapolate')
+
+    # # Create equally spaced ticks for the interpolated tunings
+    ticks2 = np.linspace(tunings['wavelength'].iloc[0], tunings['wavelength'].iloc[-1], N_ticks_extra)
+
+    # # Interpolate the templates to the new ticks
+    new_templates = f(ticks2)
+    np_to_df = np.concatenate((ticks2[:, np.newaxis], new_templates), axis=1)
+    # # # save to a data frame
+    new_tunings = pd.DataFrame(np_to_df, columns=cols)
+
+    # Return the interpolated templates
+    return new_tunings
+
+def get_cone_tunings(path_to_cone_data, N_ticks_extra):
+    """
+    Get interpolated cone tunings from the specified path to cone data.
+    
+    Args:
+        path_to_cone_data (str): The path to the cone data file.
+        N_ticks_extra (int): The desired number of ticks in the interpolated tunings.
+        
+    Returns:
+        pd.DataFrame: The interpolated cone tunings.
+    """
+    # Read cone data from the specified path
+    cone_tuning = pd.read_csv(path_to_cone_data)
+    
+    # Rename the column for wavelength
+    cone_tuning = cone_tuning.rename(columns={'LED_wavelength': 'wavelength'})
+    
+    # Get the column names of the cone tuning data
+    cone_tuning_columns = list(cone_tuning.columns)
+    
+    # Interpolate cone tunings to get extra ticks
+    cone_tuning_extra = get_interpolated_cone_tunings(cone_tuning, N_ticks_extra=N_ticks_extra)
+    
+    # Invert the values of cone tunings for analysis
+    cone_tuning_extra[cone_tuning_columns[1:]] = -1 * cone_tuning_extra[cone_tuning_columns[1:]]
+    
+    return cone_tuning_extra, cone_tuning_columns
+
+
+
+# from: https://github.com/berenslab/cone_colour_tuning/blob/main/log_opsins_Fig1f_S4/opsin_log_transformation.ipynb
+def optimizing_fun(params, x, data, return_fit=False):
+    """
+    Applies linear transformation on log(x+c) and normalizes to have max 1
+
+    Parameters
+    ----------
+    params : tuple of floats
+        (a, b, c_log) parameters of the linear transformation
+    x : array-like
+        input values
+    data : array-like
+        target values
+    return_fit : bool, optional
+        if True, returns the fit values in addition to the mean squared error
+
+    Returns
+    -------
+    mse : float
+        mean squared error between the fit and the data
+    fit : array-like, optional
+        fit values
+    """
+    a,b,c_log=params
+    # scale the input values
+    fit = a*np.log(x+c_log)+b
+    # normalize to have max 1
+    fit = fit/np.max(fit)
+    # calculate the mean squared error between the fit and the data
+    mse = np.mean((fit-data)**2)
+    if return_fit:
+        return fit, mse
+    else:
+        return mse
+
+# from: https://github.com/berenslab/cone_colour_tuning/blob/main/log_opsins_Fig1f_S4/opsin_log_transformation.ipynb
+def get_opsin_data():
+    """
+    Read opsin data from an excel file.
+    
+    Returns
+    -------
+    opsins : list
+        List of opsins: ["R", "G", "B", "U"]
+    experimental_wvs : pandas Series
+        Indices of experimental wavelengths between min and max LED values
+    opsin_df : pandas DataFrame
+        DataFrame containing opsin data
+    """
+    fpath_expinfo = r'../experiment_info/zf_leds_for_analysis.json'
+    led_nms = load_json(fpath_expinfo)
+    
+    led_nms_num = np.array([int(led) for led in led_nms])  # numerical values of the LED wavelengths [nm]
+    min_led = np.min(led_nms_num)
+    max_led = np.max(led_nms_num)
+    
+    filepath = r"..\experiment_info\model\LED_opsin_data.xlsx"
+    opsin_df = pd.read_excel(filepath, header=0)  # [::-1]
+    opsins = ["R", "G", "B", "U"]
+    experimental_wvs = opsin_df['wavelength'].between(min_led, max_led)  # indices
+    
+    return opsins, experimental_wvs, opsin_df
+
+# from: https://github.com/berenslab/cone_colour_tuning/blob/main/log_opsins_Fig1f_S4/opsin_log_transformation.ipynb
+def get_log_opsin_data():
+    """
+    Read log opsin tuning curves and LED data for all cones.
+
+    Returns
+    -------
+    hc_block_df : pandas DataFrame
+        DataFrame containing the log opsin tuning curves for all cones.
+    opsins : list
+        List of opsins: ["R", "G", "B", "U"]
+    experimental_wvs : pandas Series
+        Indices of experimental wavelengths between min and max LED values.
+    led_df : pandas DataFrame
+        DataFrame containing the LED data.
+    opsin_df : pandas DataFrame
+        DataFrame containing opsin data.
+    """
+    # Get the opsin tuning curves (from Takeshi's paper)
+    opsins, experimental_wvs, opsin_df = get_opsin_data()
+
+    """
+    Read LED data from an excel file.
+    """
+    # Define the file path
+    filepath = r"..\experiment_info\model\LED wavelength.xlsx"
+    # Read the excel file
+    led_df = pd.read_excel(filepath, header=0)  # [::-1]
+
+    """
+    Read hc_block data for all cones from excel files.
+    """
+    # Define the file paths for all cones
+    filepaths = [r"..\experiment_info\model\%s-Cone recordings - HCblock.xlsx" % opsin for opsin in opsins]
+    # Check if the files exist
+    for path in filepaths:
+        if not os.path.exists(path):
+            raise ValueError("File not found: %s" % path)
+    # Read the excel files
+    opsins_data = [pd.read_excel(path, header=0) for path in filepaths]
+    # Merge the data frames
+    hc_block_df = pd.concat(opsins_data, ignore_index=True)
+    
+    return hc_block_df, opsins, experimental_wvs, led_df, opsin_df
+
+# from: https://github.com/berenslab/cone_colour_tuning/blob/main/log_opsins_Fig1f_S4/opsin_log_transformation.ipynb
+def get_log_opsin_tunings():
+    """
+    Compute the log opsin tuning curves for all cone types by interpolating the
+    mean control traces to the opsin wavelengths and then minimizing the mean
+    squared error between the interpolated data and the opsin data.
+    
+    Returns
+    -------
+    log_opsin_tunings : pandas DataFrame
+        DataFrame containing the log opsin tuning curves for all cone types
+    """
+    hc_block_df, opsins, experimental_wvs, led_df, opsin_df = get_log_opsin_data()
+    
+    res_all = []
+    fit_all = []
+    mse_all = []
+    data = []
+
+    for cone_type in opsins:
+        # Compute mean control traces and interpolate to opsin wavelength
+        wavelength = led_df[:13]['Wavelength'].values[::-1]
+        data = hc_block_df[hc_block_df['cone_type']==cone_type].loc[:, hc_block_df.columns != 'cone_type'].mean(axis=0).values[::-1]
+        data = data/np.max(data)
+        
+        opsin = opsin_df[(opsin_df['wavelength']>=360)&(opsin_df['wavelength']<=655) ][cone_type].values
+        
+        wavelength_interp = np.arange(360,656)
+    
+        data_interp = interp.interpolate.interp1d(wavelength,data)(wavelength_interp)
+        
+        # Minimize mean squared error
+        res = optimize.minimize(optimizing_fun, x0=[0.5,2,0.1], 
+                                    args=(opsin, data_interp),
+                                bounds=((0,10),(0,10),(0,10)))
+        
+        # Extract results
+        fit, mse = optimizing_fun(res.x,opsin, data_interp, return_fit=True )
+        res_all.append(res)
+        fit_all.append(fit)
+        mse_all.append(mse)
+
+    """
+    Put into dataframe
+    """
+    log_opsin_tunings = pd.DataFrame(wavelength_interp, columns=['wavelength'])
+    for i, cone_type in enumerate(opsins):
+
+        log_opsin_tunings[cone_type] =  fit_all[i]
+        
+    return log_opsin_tunings, opsins
+
+
+def get_leds_for_analysis() -> list:
+    # Opening JSON file
+    f = open(r'..\experiment_info\zf_leds_for_analysis.json')
+    # make a list of conditions = subdirectories containing h5 files with data of a given condition
+    leds = json.load(f)
+    # Closing file
+    f.close()
+    return leds
+
+def wavelength_to_rgb(wavelength, gamma=0.8):
+    ''' taken from http://www.noah.org/wiki/Wavelength_to_RGB_in_Python
+    This converts a given wavelength of light to an
+    approximate RGB color value. The wavelength must be given
+    in nanometers in the range from 380 nm through 750 nm
+    (789 THz through 400 THz).
+
+    Based on code by Dan Bruton
+    http://www.physics.sfasu.edu/astro/color/spectra.html
+    Additionally alpha value set to 0.5 outside range
+    '''
+    wavelength = float(wavelength)
+    if wavelength >= 380 and wavelength <= 750:
+        A = 1.
+    else:
+        A = 0.5
+    if wavelength < 380:
+        wavelength = 380.
+    if wavelength > 750:
+        wavelength = 750.
+    if 380 <= wavelength <= 440:
+        attenuation = 0.3 + 0.7 * (wavelength - 380) / (440 - 380)
+        R = ((-(wavelength - 440) / (440 - 380)) * attenuation) ** gamma
+        G = 0.0
+        B = (1.0 * attenuation) ** gamma
+    elif 440 <= wavelength <= 490:
+        R = 0.0
+        G = ((wavelength - 440) / (490 - 440)) ** gamma
+        B = 1.0
+    elif 490 <= wavelength <= 510:
+        R = 0.0
+        G = 1.0
+        B = (-(wavelength - 510) / (510 - 490)) ** gamma
+    elif 510 <= wavelength <= 580:
+        R = ((wavelength - 510) / (580 - 510)) ** gamma
+        G = 1.0
+        B = 0.0
+    elif 580 <= wavelength <= 645:
+        R = 1.0
+        G = (-(wavelength - 645) / (645 - 580)) ** gamma
+        B = 0.0
+    elif 645 <= wavelength <= 750:
+        attenuation = 0.3 + 0.7 * (750 - wavelength) / (750 - 645)
+        R = (1.0 * attenuation) ** gamma
+        G = 0.0
+        B = 0.0
+    else:
+        R = 0.0
+        G = 0.0
+        B = 0.0
+    return (R, G, B, A)
+
+def get_list_of_colors(nLEDs: int, red_first: bool) -> list:
+    """
+    Args:
+        nLEDs (int): number of LEDs in the experiment
+
+    Returns:
+        list: list of colors used for ploting/visualization purposes - to show the LED ON events
+    """
+    leds = get_leds_for_analysis()
+    wl = np.flipud(np.array([int(led) for led in leds]))
+    clim = (min(wl), max(wl))
+    norm = plt.Normalize(*clim)
+    # wl = np.arange(clim[0], clim[1] + 1, 2)
+    if red_first:
+        cmap_list = np.flipud(np.array([wavelength_to_rgb(w) for w in wl]))
+    else:
+        cmap_list = np.array([wavelength_to_rgb(w) for w in wl])
+    
+    # spectralmap = LinearSegmentedColormap.from_list("nipy_spectral", colorlist)
+    return cmap_list
