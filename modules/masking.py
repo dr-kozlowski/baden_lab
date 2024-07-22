@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.ma as ma
 
-def get_mask(traces, quality_criterion_all_traces, qc, ipl_positions=None, std_qc=1):
+def get_mask(traces, quality_criterion_all_traces, ipl_positions: np.array = None, qc: float = 0.35, std_qc: float=1):
     # Create a mask based on the quality criterion
     mask_std = np.max(np.abs(traces[:, :]), axis=1) < std_qc
     mask_std = mask_std[:, np.newaxis] # add a new axis to match the dimensions of other masks
@@ -19,8 +19,8 @@ def get_mask(traces, quality_criterion_all_traces, qc, ipl_positions=None, std_q
 
 def get_masked_traces(traces: np.array, 
                       quality_criterion_all_traces: np.array, 
-                      qc: float = 0.35,
-                      IPL_positions: np.array = None, one_dim=False, std_qc: float = 1) -> np.ma.MaskedArray:
+                      qc: float,
+                      ipl_positions: np.array = None, one_dim=False, std_qc: float = 1) -> np.ma.MaskedArray:
     """Masks the input traces array based on the quality criterion.
     
     Args:
@@ -36,8 +36,8 @@ def get_masked_traces(traces: np.array,
     """
     
     # Create a mask based on the quality criterion
-    mask = get_mask(traces, quality_criterion_all_traces,
-                    qc, IPL_positions, std_qc=std_qc)
+    mask = get_mask(traces=traces, quality_criterion_all_traces=quality_criterion_all_traces, ipl_positions=ipl_positions,
+                    qc=qc, std_qc=std_qc)
     
     # Broadcast the mask to the shape of the traces array
     if traces.ndim == 3:
@@ -61,3 +61,49 @@ def get_masked_traces(traces: np.array,
     
     
     return traces_masked
+
+def get_masked_IPL_positions(ipl_positions: np.ndarray, traces: np.ndarray, quality_criterion_all_traces: np.ndarray, qc: float = 0.35, std_qc: float = 1):
+    """
+    Get masked IPL positions based on a quality criterion and -1 IPL positions.
+
+    Args:
+        ipl_positions (np.ndarray): Array of IPL positions.
+        quality_criterion_all_traces (np.ndarray): Array of quality criterion values.
+        qc (float): Quality criterion threshold.
+
+    Returns:
+        numpy.ma.MaskedArray: Masked array of IPL positions where quality criterion is less than the threshold
+        or IPL position is -1.
+    """
+    # Create a mask based on the quality criterion and IPL positions
+    mask = get_mask(traces=traces, quality_criterion_all_traces=quality_criterion_all_traces, ipl_positions=ipl_positions,
+                    qc=qc, std_qc=std_qc)
+    if isinstance(mask, np.ma.core.MaskedArray):
+        mask = mask.mask
+    # Create a masked array using the mask
+    positions_masked = ma.masked_array(ipl_positions, mask=mask)
+    
+    return positions_masked
+
+def get_masked_recorded_regions(regions: np.ndarray, ipl_positions: np.ndarray, traces: np.ndarray, quality_criterion_all_traces: np.ndarray, qc: float = 0.35, std_qc: float = 1):
+    """
+    Get masked IPL positions based on a quality criterion and -1 IPL positions.
+
+    Args:
+        ipl_positions (np.ndarray): Array of IPL positions.
+        quality_criterion_all_traces (np.ndarray): Array of quality criterion values.
+        qc (float): Quality criterion threshold.
+
+    Returns:
+        numpy.ma.MaskedArray: Masked array of IPL positions where quality criterion is less than the threshold
+        or IPL position is -1.
+    """
+    # Create a mask based on the quality criterion and IPL positions
+    mask = get_mask(traces=traces, quality_criterion_all_traces=quality_criterion_all_traces, ipl_positions=ipl_positions,
+                    qc=qc, std_qc=std_qc)
+    if isinstance(mask, np.ma.core.MaskedArray):
+        mask = mask.mask
+    # Create a masked array using the mask
+    regions_masked = ma.masked_array(regions, mask=mask)
+    
+    return regions_masked

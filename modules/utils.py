@@ -12,7 +12,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import scipy.signal as sig
 import scipy.interpolate as interp
 import scipy.optimize as optimize
@@ -660,3 +660,54 @@ def get_list_of_colors(nLEDs: int, red_first: bool) -> list:
     
     # spectralmap = LinearSegmentedColormap.from_list("nipy_spectral", colorlist)
     return cmap_list
+
+def get_layered_weights(ws, step_size: int):
+
+    results = []
+    std = []
+    num_cells = []
+    interval = []
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    for i in list(range(0, 100)[::step_size]): # range: 0-100 % of IPL
+        start = i
+        stop = i + step_size
+        interval.append([start, stop])
+        to_numpy = ws[ws["IPL"].between(start, stop)].drop(["IPL", 'condition'], axis = 1).to_numpy()
+        nan_to_fill = np.full([to_numpy.shape[1]], np.nan)
+        if to_numpy.shape[0] == 0:
+            results.append(nan_to_fill)
+            std.append(nan_to_fill)
+            num_cells.append(to_numpy.shape[0])
+        else:
+            # to_numpy = scaler.fit_transform(to_numpy)
+            results.append(np.mean(to_numpy, axis = 0))
+            std.append(np.std(to_numpy, axis = 0))
+            num_cells.append(to_numpy.shape[0])
+
+    layered_ws_means = np.array(results)
+    layered_ws_std = np.array(std)
+    layered_num_cells = np.array(num_cells)
+    return layered_ws_means, layered_ws_std, layered_num_cells, interval
+
+def get_df_with_ipl_and_regions(ipl_positions: np.ndarray, regions: list, condition: str):
+    """
+    Create a pandas DataFrame with IPL positions and regions.
+
+    Args:
+        ipl_positions (np.ndarray): Array of IPL positions.
+        regions (list): List of regions.
+        condition (str): Condition of the data.
+
+    Returns:
+        pandas.DataFrame: DataFrame with IPL positions, regions, and condition.
+    """
+    # Create a DataFrame with IPL positions
+    df = pd.DataFrame(data=ipl_positions, columns=['IPL'])
+    # Add regions column to the DataFrame
+    df['region'] = regions
+    # Add condition column to the DataFrame
+    df['condition'] = condition
+    # Drop rows with missing values
+    df.dropna(inplace=True)
+    
+    return df
